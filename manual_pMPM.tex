@@ -1,0 +1,380 @@
+\documentclass[10pt,a4paper]{article}
+\usepackage[utf8]{inputenc}
+\usepackage{amsmath}
+\usepackage{amsfonts}
+\usepackage{amssymb}
+\usepackage{graphicx}
+\usepackage[english]{babel}
+\usepackage[english]{isodate}
+\usepackage[parfill]{parskip}
+\usepackage{xcolor}
+\usepackage{listings}
+\usepackage[most]{tcolorbox}
+\usepackage{textcomp}
+\usepackage[section]{placeins}
+\usepackage{booktabs}
+\usepackage{hyperref}
+\hypersetup{
+    colorlinks=true,
+    linkcolor=blue,
+    filecolor=magenta,      
+    urlcolor=cyan,
+}
+\usepackage[titletoc,title]{appendix}
+
+\makeatletter
+\lst@AddToHook{OnEmptyLine}{\addtocounter{lstnumber}{-1}} % Remove line number increment from listings
+\makeatother
+
+\lstset{language=bash,breaklines=true,upquote=true,basicstyle=\ttfamily,
+  showstringspaces=false,
+  numbers=left, numberstyle=\color{white}, stepnumber=1,numberblanklines=false,
+  commentstyle=\color{black!40},
+  keywordstyle=\color{blue},
+  moredelim=[is][\color{Bittersweet}]{~}{~}, %
+  moredelim=*[is][\color{blue}\bfseries]{"}{"}, % 
+  moredelim=**[is][\color{Plum}]{\{}{\}}, %
+  moredelim=***[is][\color{RoyalBlue}]{*}{*}, % 
+  moredelim=***[is][\color{OliveGreen}]{'}{'}, % 
+  otherkeywords = $\#}                                       %$
+
+\newtcolorbox[auto counter,number within=section]{file}[2][]{
+  enhanced,
+  breakable,
+  fonttitle=\scshape,
+  title={File \thetcbcounter: #2},
+  colback=yellow!10,colframe=black!75,  
+  left=7mm,
+   overlay={
+            \begin{tcbclipinterior}
+                \fill[gray] (frame.south west) rectangle ([xshift=7mm]frame.north west);
+            \end{tcbclipinterior}},
+  #1
+}
+
+
+\makeatletter
+\let\oldfile\file
+\def\file{\@ifnextchar[\file@i \file@ii}
+\def\file@i[#1]{\FloatBarrier\oldfile[#1]}
+\def\file@ii{\oldfile\FloatBarrier}
+\makeatother
+
+\newtcolorbox[auto counter,number within=section]{tip}[2][]{
+  enhanced,
+  breakable,
+  fonttitle=\scshape,
+  title={Tip \thetcbcounter: #2},
+  colback=red!10,colframe=black!75,  
+%  left=7mm,
+%   overlay={
+%            \begin{tcbclipinterior}
+%                \fill[gray] (frame.south west) rectangle ([xshift=7mm]frame.north west);
+%            \end{tcbclipinterior}},
+  #1
+}
+
+
+\author{Lei Wang \\ \href{mailto:sanshi.wang@gmail.com}{sanshi.wang@gmail.com}}
+\title{User manual of the parallel 3D implicit MPM program -- pMPM}
+
+
+\newcommand{\code}[1]{\texttt{#1}}
+
+\graphicspath{{fig/}}
+
+
+\begin{document}
+
+\maketitle
+
+\pagenumbering{Roman}
+\tableofcontents
+%\newpage
+%\listoffigures
+%\newpage
+%\listoftables
+%\newpage
+\pagenumbering{arabic}
+
+
+
+%\begin{figure}[!ht]
+%\centering
+%\includegraphics[width=0.8\textwidth]{}
+%\caption{.}
+%\label{fig:}
+%\end{figure}
+
+
+
+\section{Introduction}
+
+The parallel 3D implicit MPM program is developed to solve large deformation problem with complex geometry. This program is written in C++ with integrating some scientific computing libraries and tools for different purposes:
+\begin{itemize}
+\item \code{boost} is used for most of vectors or matrices, e.g. coordinates of mesh nodes and connectivities of elements. With \code{boost}, many operators for vectors and matrices are available, e.g. getting rows of matrix, computation of determinant.   
+\item \code{MOAB} or Mesh Oriented datABase is used to manage the computational mesh. At the beginning of simulation, the mesh is saved into a \code{MOAB} structure. With that structure, the operation on mesh is convenient. For example, the neighbourhood of tetrahedral mesh can be built efficiently. 
+\item \code{PETSc} is the solver for the system of nonlinear equations, after discretization of the partial differential equations. 
+\end{itemize}
+The current parallelism is with the MPI over multiple processes. 
+
+This manual is organised as follows. Section \ref{ch:start} introduces a simple example to demonstrate how to run sequentially this program. Section \ref{ch:exp} includes an example to show how to run this program in parallel. Section \ref{ch:exe} introduces the code structure and how to develop new functions in this program. 
+
+Notably, this user manual assumed that you have the programming environment set up properly in advance. If you need to set up that, please refer to Appendix \ref{app:install}.  
+
+
+\section{Getting started with a simple example}
+\label{ch:start}
+
+This section introduces how to perform a numerical analysis with the proposed pMPM through a simple example. The procedure of performing a numerical analysis and where they can be done when using pMPM is shown in Figure \ref{fig:simulation}. Each step is demonstrated in this example for simulation of the simple stretch. As shown in Figure \ref{fig:stretch_geo}\,(a), the problem domain is a cuboid, with edge length 2\,m. It is stretched along one direction in the simulation, see Figure \ref{fig:stretch_geo}\,(b).
+
+\begin{figure}[!ht]
+\centering
+\includegraphics[width=0.8\textwidth]{simulation}
+\caption{The procedures of performing a numerical analysis and where each of them is done when using pMPM on Linux. SALOME and Paraview are software, `problem.bc' and `run.sh' are text files.  }
+\label{fig:simulation}
+\end{figure}
+
+\begin{figure}[!ht]
+\centering
+\includegraphics[width=0.9\textwidth]{stretch}
+\caption{Simple stretch: (a) geometry and (b) deformed configuration with $6.8$m  displacement.}
+\label{fig:stretch_geo}
+\end{figure}
+
+The CAD model of a cuboid is built and tetrahedral mesh of it is generated in SALOME, as shown in Figure \ref{fig:box_mesh}. The linear mesh is firstly generated and then converted to quadratic one. The nodes with boundary conditions are grouped and there groups are named, by `x0', `y0', `z0' and `y1', highlighted in Figure \ref{fig:box_mesh}. This quadratic mesh with groups of nodes are explored to `box.unv'. 
+
+\begin{figure}[!ht]
+\centering
+\includegraphics[width=\textwidth]{box_qmesh.png}
+\caption{CAD is built and quadratic mesh is generated in SALOME with nodes grouped for boundary conditions.}
+\label{fig:box_mesh}
+\end{figure}
+
+Roller boundary conditions were applied on three surfaces, $x=0,y=0,z=0$, and an incremental displacement of $\Delta u=0.4$\,m per load step was applied on the surface, $y=2$\,m, as shown in Figure~\ref{fig:stretch_geo}. These are specified in `box.bc', as shown in File \ref{file:box_bc}. In `box.bc', the groups name in `box.unv' are used for linking to where the boundary condition is applied. As shown in File \ref{file:box_bc}, roller boundary condition is applied on nodes in groups `x0', `y0' and `z0', and displacement boundary condition is specified for `y1'. The moving mesh strategy is that the mesh is simply stretched along the $y$-axis direction such that the boundary of the physical domain aligns with the mesh. Notably, the names of these files except the extensions should be the same. 
+
+\begin{file}[label=file:box_bc]{box.bc}
+\lstinputlisting[language=bash]{code/box.bc}
+\end{file}
+
+The material uses a finite strain elasto-plastic associated flow constitutive model with a von Mises yield function. This is specified in the `run.sh' in File \ref{file:run}. As seen in Line 15 of File \ref{file:run}, Young's modulus $E=10^3$\,Pa is specified by `-E', $\nu=0.0$ by `-nu', and $f_c=400$\,Pa by `-fc'. The explanation of other user options in `UserOpt' is listed in Table \ref{tab:opt}. For a complete list of available options, please refer to Appendix \ref{app:option}.
+
+\begin{file}[label=file:run]{run.sh}
+\lstinputlisting[language=bash]{code/run.sh}
+\end{file}
+
+\begin{table}[!ht]
+\caption{Meaning of user options in File \ref{file:run}}
+\label{tab:opt}
+\begin{tabular}{lp{0.7\textwidth}}
+\toprule
+option & meaning of the value here\\
+\midrule
+writeMeshMp & save *.vtk for mesh and material points per step  \\
+EXP & indicate this example for directing corresponding moving mesh strategy and output \\
+GNL & use finite strain \\
+MNL & indicator of von Mises material model \\
+E & Young's modulus \\
+nu & Poission's ratio \\
+fc & yield strength \\
+withFbpMesh & input patch mesh and then computational mesh automatically is generated in code \\
+withFbpSNES & use $\bar{F}$-patch method \\
+mppe & number of material points per element \\
+autoDt & not use automatic step size strategy \\
+steps & number of load steps \\
+debugoutput & not output debugging information \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+
+The simulation can be run by `./run.sh' in the Linux terminal. There will be some output on the terminal to show the model information and solving procedure. Also, there are many output files are saved in the directory `results\_files', including 
+\begin{description}
+
+\item[`box\_mesh\_$i$.vtk', $i$=1,2,$\cdots$:]  the computational mesh at the beginning of the $i$-th load step, with nodal incremental displacement from previous load step, 
+\item[`box\_mp\_$i$.vtk', $i$=1,2,$\cdots$:] the material points at the beginning of the $i$-th load step, with total displacement, material point volume, logarithm strain, Kirchhoff stress and Cauchy stress at material points,
+\item[`residual.txt':] the L2 norm of residual or out-of-balance force for each step and iteration,
+\item[`time\_processes\_$p$.txt':] simulation time for locating material points and build system of equations on the process $p$ in each step. Notably, this is a real simulation time, or real CPU time, without including waiting time. 
+\item[`time\_assembly.txt':] time for computing Jacobian or tangential global stiffness matrix and out-of-balance force vector in each iteration, 
+\item[`ss\_utotal\_tau22.txt':] for step, incremental displacement, total displacement from boundary conditions and the normal component of Kirchhoff stress $\tau_{22}$ along the stretch direction at the first material point. Notably, this file is example specific output. Different values of EXP in Line 15 of File \ref{file:run} will lead to save different interested values to output files. 
+
+\end{description}
+
+
+\begin{figure}[!ht]
+\centering
+\includegraphics[width=\textwidth]{box_disp.png}
+\caption{The computational mesh and material points with total displacement at the beginning of the third load step are visualized in Paraview.}
+\label{fig:box_disp}
+\end{figure}
+
+
+\begin{figure}[htb]
+\centering
+\includegraphics[width=0.8\textwidth]{cs-ex}
+\caption{Files structure involving a minimal example -- `stretch'. \code{pMPM} is the executable, built from the source code \code{pMPM.cpp} by \code{make all} in the directory `examples'. Running the simulation of the simple stretch of a box by \code{./run.sh} reads the model in the directory `input', and saves all outputs in the directory `results\_files'.}
+\label{fig:cs-exp}
+\end{figure}
+
+
+\section{How to run pMPM in parallel}
+\label{ch:exp}
+
+This section introduces an examples to demonstrate how to run a simulation with pMPM in parallel. The example is double-notched plate. As shown in Figure \ref{fig:notch_res}, the double-notched plate is stretched. The physical domain is firstly discretized to the patch mesh (linear mesh) in (b), which is saved to `plate.dat'. The sketch of this physical domain and discretization can be done automatically by running the Python script in SALOME by 
+
+\begin{tip}{Automatically generate mesh through SALOME}
+File $\longrightarrow$ Load Script... $\longrightarrow$ Choose `plate.py' \\
+File $\longrightarrow$ Connect 
+\end{tip}
+After loading this model into the SALOME, select the `Mesh' module, the patch mesh, which is a linear mesh, can be visualized. Exporting this mesh `Mesh 1' into the file `plate.dat' in the directory `input'. When running the simulation, pMPM reads `plate.dat' and use METIS to perform the decomposition as shown in \ref{fig:notch_res}\,(b). 
+
+In SALOME, this linear patch mesh will be converted to the quadratic mesh, for including nodes at the middle of edges. This quadratic mesh will exported into `plate.unv' as the mesh file. The computational linear mesh will be generated inside of pMPM to divide each 10-node quadratic tetrahedron to eight linear tetrahedral element. The corresponding procedure in SALOME is summarized in Tip \ref{tip:mesh}.       
+
+\begin{tip}[label=tip:mesh]{Export mesh file}
+Switch two `Mesh' module on the second row of menu $\longrightarrow$ right click on `Mesh 1' $\longrightarrow$ `Convertto/from quadratic' $\longrightarrow$ 
+Covert to quadratic $\longrightarrow$ Apply and close. \\
+Select all groups under `Groups of Nodes' $\longrightarrow$ right click on them $\longrightarrow$ `Update' to update the contents of these groups for including additional mid-edge nodes.  \\
+right click on `Mesh 1' $\longrightarrow$ Export to `plate.unv'.
+\end{tip}
+
+\begin{figure}[!ht]
+\centering
+\includegraphics[width=\textwidth]{notch_res}
+\caption{Double-notched plate: (a) geometry and boundary conditions, the roller boundary condition on both back and front surfaces is not shown; (b) the patch mesh with colors indicating on two processes; (c) the computational mesh, generated from the patch mesh; and (d) the material points in the deformed configuration with $u=1$\,mm.}
+\label{fig:notch_res}
+\end{figure}
+
+The associated boundary conditions are specified in `plate.bc' (File \ref{file:plate_bc}). The material parameters and solver options are specified in `run.sh' (File \ref{file:plate_sh}). Running this bash script will generate simulation results in directory `results\_files'. With the output `*.vtk' files in directory `results\_files', the computational mesh and material points fields can be visualised in Paraview, e.g. see \ref{fig:notch_res}\,(d). With the `EXP', pMPM also outputs the reaction force at the end, on which the displacement boundary condition is applied. This is called `ss\_utotal\_fy\_fnorm\_rank$i$', where $0 \leqslant i < np$, the id of process. These contents of these values from different processes should be the same. This data can be plotted in Matlab to generate Figure \ref{fig:notch_fr}, by running the enclosed `plot\_plate\_fr.m' in the directory `matlab'.   
+
+\begin{tip}[label=tip:prun]{Run simulation with $np$ processes in parallel}
+./run.sh $np$ $>$ run.log \& 
+\end{tip}
+
+
+\begin{file}[label=file:plate_bc]{plate.bc}
+\lstinputlisting[language=bash]{code/plate.bc}
+\end{file}
+
+\begin{file}[label=file:plate_sh]{run\_plate.sh}
+\lstinputlisting[language=bash]{code/run_plate.sh}
+\end{file}
+
+\begin{figure}[!ht]
+\centering
+\includegraphics[width=.7\textwidth]{plate_frct}
+\caption{Double-notched plate: magnitude of reaction force against the displacement.}
+\label{fig:notch_fr}
+\end{figure}
+
+
+
+
+\section{Code structure and new development}
+\label{ch:exe}
+
+This section introduces the code structure and some tips on new development. With this information, the developer is able to understand where are the gateway for developing new functions and how to implement them.  
+
+The code structure for programming of the pMPM is shown in Figure \ref{fig:cs-prog}. The main code of the program is \code{pMPM.cpp}. Many user-defined functions are included in \code{functions.cpp}. If some functions are inserted in \code{functions.cpp}, the corresponding declaration of these functions should be added into the \code{functions.hpp}. The \code{NRFunctions.cpp} includes all functions for the Newton Raphson iteration, e.g. computation of Jacobian (tangential stiffness matrix) and functions (out-of-balance-force). The \code{unvReader.cpp} includes functions to read unv mesh file into the program and save that to a MOAB structure. New material models can be inserted into \code{materialModels.cpp}.
+
+ 
+
+
+
+The \code{pMPM.cpp} can be classified to several parts as follows
+\begin{tip}{Procedures in \code{pMPM.cpp}}
+\begin{itemize}
+\item set up problem to read all input files into variables in the pMPM,
+\item for each load step,
+\begin{itemize}
+\item output mesh and material point into files,
+\item call SNESSolve to solve the system of nonlinear equations, 
+\item update material point field,
+\item apply moving mesh strategy.
+\end{itemize} 
+
+\end{itemize}
+\end{tip}
+
+
+\begin{figure}[!h]
+\centering
+\includegraphics[width=\textwidth]{cs-prog}
+\caption{Files structure for programming in the pMPM. The main function is \code{pMPM.cpp} with some user defined functions in \code{functions.cpp}. The \code{NRFunctions.cpp} includes computation of Jacobian and functions.}
+\label{fig:cs-prog}
+\end{figure}
+
+
+\clearpage
+
+\begin{appendices}
+\section{Installation of the program}
+\label{app:install}
+This section introduces how to install the program into your local computer, including how to download and configure your programming environment.  
+
+All of documents of this program can be downloaded from Github with the address \url{https://github.com/sanshi2000/pMPM}. It can be directly downloaded by clicking on `Clone or download' as a ZIP file or using git to clone the repository. A useful tutorial for the later method can be found \href{https://kbroman.org/github\_tutorial/pages/fork.html}{here}. 
+
+After downloading the code into your computer, please follow the necessary steps in \code{pMPM/tools/Ubuntu\_configuration/README} for configuration.
+
+
+\section{User options}
+\label{app:option}
+This section introduces available user options and the meaning of different values. The first value for each option is the default value, which is used if the option is not used.
+
+\begin{table}[!ht]
+\caption{Meaning of user options in File \ref{file:run}}
+\label{tab:opt}
+\begin{tabular}{ccp{0.7\textwidth}}
+\toprule
+option & values & meaning \\
+\midrule
+writeMeshMp & 0 & not output mesh and material points files \\
+            & 1 & save *.vtk for mesh and material points  \\
+\hline 
+writeInc & 1 & save mesh and material points to *.vtk per step \\
+         & $n$ & save mesh and material points to *.vtk per $n$ step \\
+\hline
+EXP & 1--12 & indicate an example for specifying corresponding moving mesh strategy and output, see \code{pMPM/examples/README} for details \\
+\hline 
+GNL & 0 & use infinitesimal strain \\
+    & 1 & use finite strain \\
+\hline
+MNL & 1--3 & indicator of material model \\
+\hline 
+E & $E$ & Young's modulus \\
+\hline
+nu & $\nu$ & Poission's ratio \\
+\hline
+fc & $f_c$ & yield strength \\
+\hline
+withFbpMesh & 0 & input linear mesh for standard MPM \\
+or withFbarPatch  & 1 & input patch mesh and then computational mesh automatically is generated in code \\
+\hline
+withFbpSNES & 0 & not use $\bar{F}$-patch formulation, i.e. use standard MPM \\
+or withFbarPatchSNES & 1 & use $\bar{F}$-patch method \\
+\hline
+mppe & 1,4, or 11 & number of material points per element \\
+\hline 
+autoDt & 0 & not use automatic step size, i.e. used fixed step size \\
+       & 1 & use automatic step size strategy \\
+\hline
+steps & $s$ & number of maximum load steps \\
+\hline
+debugoutput & 0 & not output debugging information \\
+            & 1 & output debugging information \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+
+ 
+\end{appendices}
+
+
+
+
+ 
+
+%\chapter{Miscellaneous}
+%\label{ch:mis}
+
+\end{document}

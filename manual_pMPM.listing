@@ -1,0 +1,2 @@
+{language=bash,caption={some text above},label=remote_command_execution, otherkeywords = $\#}
+\lstinputlisting[language=bash]{code/run.sh}
